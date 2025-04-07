@@ -1,34 +1,52 @@
-import ee
+import ee, os, time, tempfile
+from google.colab import drive
 
-def init_gee():
-    try:
-        ee.Initialize()
-    except Exception:
-        # En Colab se abre el popup de autenticación
-        ee.Authenticate()
-        ee.Initialize()
+drive.mount('/content/drive')   #  se monta una vez
 
-def get_regions():
-    gaul = ee.FeatureCollection('FAO/GAUL/2015/level1')
-    return gaul.filter(ee.Filter.Or(
-        ee.Filter.eq('ADM1_NAME', 'Cundinamarca'),
-        ee.Filter.eq('ADM1_NAME', 'Boyaca')
-    ))
+TMP_DIR = "/content/drive/My Drive/gee_cache"   #  carpeta‑caché en Drive
+os.makedirs(TMP_DIR, exist_ok=True)
 
-def ndvi_lst_median(start, end, buffer_km=10, scale=250):
-    regions = get_regions()
-    roi = regions.geometry().buffer(buffer_km * 1000)
+def init_gee(service_acct_json=None):
+    """Inicializa Earth Engine con OAuth (popup) o cuenta de servicio."""
+    if service_acct_json:
+        creds = ee.ServiceAccountCredentials(
+            service_account=service_acct_json["client_email"],
+            key_data=service_acct_json
+        )
+        ee.Initialize(creds)
+    else:
+        try:
+            ee.Initialize()
+        except Exception:
+            ee.Authenticate()
+            ee.Initialize()
 
-    ndvi = (ee.ImageCollection('MODIS/061/MOD13Q1')
-            .filterBounds(roi).filterDate(start, end)
-            .select('NDVI').median().multiply(0.0001))
+def wait_for_task(task, poll_interval=30):
+    """Bloquea hasta que la tarea termine o falle."""
+    while task.active():
+        print(f"⏳  Esperando… estado: {task.status()['state']}")
+        time.sleep(poll_interval)
+    status = task.status()
+    if status['state'] != 'COMPLETED':
+        raise RuntimeError(f"Tarea falló: {status}")
+    print("✅  Tarea completada")
 
-    lst = (ee.ImageCollection('MODIS/061/MOD11A1')
-           .filterBounds(roi).filterDate(start, end)
-           .select('LST_Day_1km').median()
-           .multiply(0.02).subtract(273.15).rename('LST'))
+def export_if_needed(img, desc, region, scale, crs='EPSG:4326'):
+    """Exporta a Drive solo si el .tif no existe en la caché."""
+    tif_path = os.path.join(TMP_DIR, f"{desc}.tif")
+    if os.path.exists(tif_path):
+        print(f"🔁  Usando caché local {tif_path}")
+        return tif_path
 
-    ndvi = ndvi.reproject(crs='EPSG:4326', scale=scale).clip(regions)
-    lst  = lst .reproject(crs='EPSG:4326', scale=scale).clip(regions)
-    return ndvi, lst, regions
+    task = ee.batch.Export.image.toDrive(
+        image=img, description=desc, fileNamePrefix=desc,
+        scale=scale, region=region, fileFormat='GeoTIFF', crs=crs)
+    task.start()
+    wait_for_task(task)
 
+    # Copiar desde Drive al runtime
+    drive_path = f"/content/drive/My Drive/{desc}.tif"
+    if not os.path.exists(drive_path):
+        raise FileNotFoundError("Exportación terminada pero archivo no encontrado en Drive.")
+    os.rename(drive_path, tif_path)
+    return tif_path
