@@ -1,155 +1,166 @@
-# gee_utils.py
-# ------------------------------------------------------------
-# Utilidades para Google Earth Engine + exportación con caché
-# Juan David Amaris · 2025
-# ------------------------------------------------------------
-import os, time, ee, shutil, sys
-from importlib import util as _iu
-import google.auth  # Import for credentials
+import os
+import time
+import zipfile
+import io
+import requests
+from datetime import datetime
 
-# ============================================================
-# 0.  Carpeta de caché  (Drive si existe, local en otro caso)
-# ============================================================
-CACHE_DIR   = "/content/gee_cache"          # fallback local
-USING_DRIVE = False
+import ee
+import numpy as np
+import rasterio
 
-try:
-    from google.colab import drive, _ipython
-    if _ipython.get_ipython() is not None:  # estamos dentro de un notebook
-        drive.mount("/content/drive", force_remount=False)
-        CACHE_DIR   = "/content/drive/My Drive/gee_cache"
-        USING_DRIVE = True
-        print("✅  Drive montado → caché:", CACHE_DIR)
-except Exception as e:
-    print("⚠️  No se montó Drive, usaré caché local:", CACHE_DIR)
+# --------------------------------------------------
+# 1. Autenticación e inicialización de Google Earth Engine
+# --------------------------------------------------
 
-os.makedirs(CACHE_DIR, exist_ok=True)
+def init_gee(service_account_email: str | None = None, private_key_path: str | None = None):
+    """Inicializa Earth Engine.
 
-# ============================================================
-# 1.  Inicializar Earth Engine
-# ============================================================
-def init_gee(service_acct_json: dict | None = None):
+    Si no se proporciona cuenta de servicio, intenta autenticación OAuth
+    interactiva (útil en Colab).  Si ya existen credenciales guardadas
+    simplemente se reutilizan.
     """
-    Inicializa Earth Engine con el proyecto EE_PROJECT.
-      • Si se pasa un JSON de Service Account → lo usa.
-      • Si no, intenta EE.Initialize(); si falla y estamos en notebook
-        abre el flujo OAuth.
-    """
-    if service_acct_json:
-        creds = ee.ServiceAccountCredentials(
-            service_account=service_acct_json["client_email"],
-            key_data=service_acct_json,
-        )
-        ee.Initialize(creds, project=EE_PROJECT)
-        print("✅ Earth Engine initialized with service account.")
-    else:
-        try:
+    try:
+        if service_account_email and private_key_path:
+            credentials = ee.ServiceAccountCredentials(service_account_email, private_key_path)
+            ee.Initialize(credentials)
+        else:
+            # Inicialización típica para Colab / OAuth.
             ee.Initialize()
-            print("✅ Earth Engine initialized with default credentials.")
-        except ee.EEException as e:
-            if _in_notebook():
-                print("⚠️ Default initialization failed. Trying OAuth...")
-                # Get application default credentials
-                credentials, project = google.auth.default() 
-                ee.Initialize(credentials, project=EE_PROJECT)
-                print("✅ Earth Engine initialized with OAuth.")
-            else:
-                raise e 
+    except Exception:
+        # Si falló (p. ej. primera vez) se autentica de forma interactiva.
+        print("⚠️  No se encontraron credenciales válidas, iniciando flujo OAuth…")
+        ee.Authenticate()
+        ee.Initialize()
+    print("✅ Earth Engine listo.")
 
-# ============================================================
-# 2.  Polling de tareas
-# ============================================================
-def wait_for_task(task, poll_interval: int = 30):
-    """Bloquea hasta que la tarea termine (o falle)."""
-    while task.active():
-        print(f"⏳  Esperando… estado: {task.status()['state']}")
-        time.sleep(poll_interval)
-    status = task.status()
-    if status["state"] != "COMPLETED":
-        raise RuntimeError(f"Tarea falló: {status}")
-    print("✅  Tarea completada")
+# --------------------------------------------------
+# 2. Regiones de interés
+# --------------------------------------------------
 
-# ============================================================
-# 3.  Exportar imagen con caché
-# ============================================================
-def export_if_needed(img, desc: str, region, scale: int, crs: str = "EPSG:4326"):
+def _boyaca_cundinamarca_geometry():
+    """Devuelve la geometría unificada de Boyacá y Cundinamarca (GAUL‑2015)."""
+    adm1 = ee.FeatureCollection("FAO/GAUL/2015/level1")
+    sel  = adm1.filter(ee.Filter.Or(
+        ee.Filter.eq('ADM1_NAME', 'Boyacá'),
+        ee.Filter.eq('ADM1_NAME', 'Cundinamarca')
+    ))
+    return sel.geometry().bounds()
+
+ROI = _boyaca_cundinamarca_geometry()
+
+# --------------------------------------------------
+# 3. Productos satelitales y pre‑procesamiento
+# --------------------------------------------------
+
+_S2_SR   = "COPERNICUS/S2_SR_HARMONIZED"  # Sentinel‑2 nivel 2A
+_MOD11A2 = "MODIS/061/MOD11A2"            # LST 8‑días 1 km
+
+
+def _sentinel2_ndvi(start: str, end: str):
+    start_dt, end_dt = map(lambda s: datetime.strptime(s, "%Y-%m-%d"), (start, end))
+    coll = (ee.ImageCollection(_S2_SR)
+            .filterDate(start_dt, end_dt)
+            .filterBounds(ROI)
+            .filter(ee.Filter.lte('CLOUDY_PIXEL_PERCENTAGE', 30))
+            .map(lambda img: img.updateMask(img.select('QA60').bitwiseAnd(1 << 10).eq(0)))  # quitar saturación
+           )
+    def _add_ndvi(img):
+        ndvi = img.normalizedDifference(['B8', 'B4']).rename('NDVI')
+        return img.addBands(ndvi)
+    coll = coll.map(_add_ndvi)
+    return coll.select('NDVI').median()
+
+
+def _modis_lst(start: str, end: str):
+    start_dt, end_dt = map(lambda s: datetime.strptime(s, "%Y-%m-%d"), (start, end))
+    coll = (ee.ImageCollection(_MOD11A2)
+            .filterDate(start_dt, end_dt)
+            .filterBounds(ROI))
+    # La banda LST_Day_1km está en Kelvin * 0.02
+    lst  = coll.select('LST_Day_1km').median().multiply(0.02).subtract(273.15).rename('LST')
+    return lst.resample('bilinear')
+
+
+def ndvi_lst_median(start: str, end: str):
+    """Calcula imágenes medianas de NDVI (Sentinel‑2) y LST (MODIS).
+
+    Retorna (ndvi_img, lst_img, region) donde *region* es la geometría de exportación.
     """
-    Exporta a GeoTIFF solo si no existe en la caché.
-    Devuelve la ruta local al .tif.
+    ndvi = _sentinel2_ndvi(start, end)
+    lst  = _modis_lst(start, end)
+    return ndvi, lst, ROI
+
+# --------------------------------------------------
+# 4. Exportación a GeoTIFF local (solo si no existe)
+# --------------------------------------------------
+
+def _download_url_to_tif(url: str, out_tif: str):
+    """Descarga y extrae el GeoTIFF desde el URL de Earth Engine (zip)."""
+    print(f"⬇️  Descargando {os.path.basename(out_tif)} …")
+    r = requests.get(url, stream=True)
+    r.raise_for_status()
+    z = zipfile.ZipFile(io.BytesIO(r.content))
+    z.extractall(os.path.dirname(out_tif))
+
+
+def export_if_needed(img: ee.Image, name: str, region, scale: int = 250, out_dir: str = "/content/data") -> str:
+    """Exporta *img* a GeoTIFF si aún no existe y devuelve la ruta local.
+
+    *img*      ‑ Imagen de Earth Engine
+    *name*     ‑ Nombre base del archivo (sin extensión)
+    *region*   ‑ Lista de coords [[lon,lat], …] o ee.Geometry
+    *scale*    ‑ Resolución en metros
+    *out_dir*  ‑ Carpeta de salida local
     """
-    tif_path = os.path.join(CACHE_DIR, f"{desc}.tif")
-    if os.path.exists(tif_path):
-        print(f"🔁  Usando caché: {tif_path}")
-        return tif_path
+    os.makedirs(out_dir, exist_ok=True)
+    out_tif = os.path.join(out_dir, f"{name}.tif")
+    if os.path.exists(out_tif):
+        print(f"✅ {name}.tif ya existe, se omite exportación.")
+        return out_tif
 
-    print(f"🚀  Exportando {desc} a Drive…")
-    task = ee.batch.Export.image.toDrive(
-        image=img,
-        description=desc,
-        fileNamePrefix=desc,
-        scale=scale,
-        region=region,
-        fileFormat="GeoTIFF",
-        crs=crs,
-    )
-    task.start()
-    wait_for_task(task)
-
-    if USING_DRIVE:
-        drive_path = f"/content/drive/My Drive/{desc}.tif"
-        if not os.path.exists(drive_path):
-            raise FileNotFoundError("Exportación terminada pero archivo no encontrado en Drive.")
-        shutil.move(drive_path, tif_path)
-        print(f"📥  Copiado a caché: {tif_path}")
+    # Solicitar URL de descarga (Earth Engine genera ZIP)
+    print(f"🚀 Exportando {name} desde Earth Engine…")
+    if isinstance(region, ee.Geometry):
+        region_coords = region.coordinates().getInfo()
     else:
-        raise RuntimeError(
-            "Exportación completada, pero sin Drive montado para copiar el archivo."
-        )
+        region_coords = region  # asume lista
 
-    return tif_path
+    url = img.getDownloadURL({
+        'scale': scale,
+        'crs': 'EPSG:4326',
+        'region': region_coords,
+        'format': 'GEO_TIFF'
+    })
 
-# ============================================================
-# 4.  Funciones de dominio (regiones + medianas)
-# ============================================================
-def get_regions():
-    """FeatureCollection con Cundinamarca y Boyacá."""
-    gaul = ee.FeatureCollection("FAO/GAUL/2015/level1")
-    return gaul.filter(
-        ee.Filter.Or(
-            ee.Filter.eq("ADM1_NAME", "Cundinamarca"),
-            ee.Filter.eq("ADM1_NAME", "Boyaca"),
-        )
-    )
+    # Descargar y extraer
+    _download_url_to_tif(url, out_tif)
 
-def ndvi_lst_median(start_date: str, end_date: str,
-                    buffer_km: int = 10, scale: int = 250):
-    """
-    Devuelve (ndvi_img, lst_img, regiones).
-    NDVI: MODIS/061/MOD13Q1   LST: MODIS/061/MOD11A1
-    """
-    regions = get_regions()
-    roi = regions.geometry().buffer(buffer_km * 1000)
+    # El ZIP incluye el tif como {name}.tif dentro de la carpeta.
+    # Verificamos su existencia y retornamos ruta final.
+    if not os.path.exists(out_tif):
+        # Buscar el archivo dentro del directorio
+        for root, _, files in os.walk(out_dir):
+            for f in files:
+                if f.lower().endswith('.tif') and name.lower() in f.lower():
+                    out_tif = os.path.join(root, f)
+                    break
+    print(f"✅ Exportación terminada: {out_tif}")
+    return out_tif
 
-    ndvi = (
-        ee.ImageCollection("MODIS/061/MOD13Q1")
-        .filterBounds(roi)
-        .filterDate(start_date, end_date)
-        .select("NDVI")
-        .median()
-        .multiply(0.0001)
-    )
+# --------------------------------------------------
+# 5. Utilidades extra
+# --------------------------------------------------
 
-    lst = (
-        ee.ImageCollection("MODIS/061/MOD11A1")
-        .filterBounds(roi)
-        .filterDate(start_date, end_date)
-        .select("LST_Day_1km")
-        .median()
-        .multiply(0.02)
-        .subtract(273.15)
-        .rename("LST")
-    )
+def read_flat_array(path: str):
+    """Lee un raster en un array 1‑D (ignora nodata)."""
+    with rasterio.open(path) as src:
+        arr = src.read(1)
+        nodata = src.nodata if src.nodata is not None else np.nan
+    return arr.flatten(), nodata
 
-    ndvi = ndvi.reproject(crs="EPSG:4326", scale=scale).clip(regions)
-    lst  = lst .reproject(crs="EPSG:4326", scale=scale).clip(regions)
-    return ndvi, lst, regions
+__all__ = [
+    'init_gee',
+    'ndvi_lst_median',
+    'export_if_needed',
+]
