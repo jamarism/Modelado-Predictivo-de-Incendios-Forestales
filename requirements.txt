@@ -1,0 +1,6 @@
+earthengine-api
+geopandas
+rasterio
+numpy
+matplotlib
+gradio          
