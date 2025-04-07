@@ -1,47 +1,45 @@
-import gradio as gr
-import geopandas as gpd
-import rasterio
-import numpy as np
-import matplotlib.pyplot as plt
-import tempfile, os
+import gradio as gr, rasterio, numpy as np, matplotlib.pyplot as plt
+from gee_utils import init_gee, ndvi_lst_median, export_if_needed
 
-from gee_utils import init_gee, ndvi_lst_median
+init_gee()   # usa OAuth; para cuenta de servicio ver sección 4
 
-init_gee()  # autentica una sola vez
+def run(start_date, end_date, capas):
+    ndvi_img, lst_img, regions = ndvi_lst_median(start_date, end_date)
+    region = regions.geometry().bounds().getInfo()['coordinates']
+    scale  = 250
 
-def run(start_date, end_date):
-    ndvi, lst, regions = ndvi_lst_median(start_date, end_date)
+    rutas = {}
+    if "NDVI" in capas:
+        rutas['NDVI'] = export_if_needed(ndvi_img, f"NDVI_{start_date}_{end_date}", region, scale)
+    if "LST" in capas:
+        rutas['LST']  = export_if_needed(lst_img,  f"LST_{start_date}_{end_date}",  region, scale)
 
-    # Exportación temporal a GeoTIFF dentro de Colab
-    tmp = tempfile.mkdtemp()
-    ndvi_path = os.path.join(tmp, 'ndvi.tif')
-    lst_path  = os.path.join(tmp, 'lst.tif')
+    if len(rutas) < 2:
+        return "Selecciona al menos dos capas", None
 
-    region_coords = regions.geometry().bounds().getInfo()['coordinates']
+    # Leer rasters y graficar
+    with rasterio.open(rutas['NDVI']) as src: ndvi = src.read(1).flatten()
+    with rasterio.open(rutas['LST'])  as src: lst  = src.read(1).flatten()
 
-    task1 = ee.batch.Export.image.toDrive(
-        image=ndvi, description='tmp_ndvi',
-        scale=250, region=region_coords, fileFormat='GeoTIFF')
-    task2 = ee.batch.Export.image.toDrive(
-        image=lst,  description='tmp_lst',
-        scale=250, region=region_coords, fileFormat='GeoTIFF')
-    task1.start(); task2.start()
-    task1.status(); task2.status()  # en prod añadir polling
-
-    # Aquí leerías los tiffs cuando estén listos…
-    # Para demo, devolvemos una figura vacía
-    fig, ax = plt.subplots()
-    ax.set_title("Exportación en progreso…")
-    return fig
+    mask = (ndvi > 0) & (lst > 0)
+    fig, ax = plt.subplots(figsize=(7,5))
+    ax.scatter(ndvi[mask], lst[mask], s=4, alpha=0.4, edgecolors='none')
+    ax.set_xlabel("NDVI"); ax.set_ylabel("°C"); ax.set_title("NDVI vs LST")
+    ax.grid(True)
+    return "Gráfico listo", fig
 
 demo = gr.Interface(
     fn=run,
-    inputs=[gr.Text(value='2023-01-01', label='Fecha inicio'),
-            gr.Text(value='2023-12-31', label='Fecha fin')],
-    outputs=gr.Plot(label='NDVI vs LST'),
-    title="Herramienta NDVI‑LST Boyacá / Cundinamarca",
-    description="Calcula medianas MODIS y genera la gráfica de dispersión")
+    inputs=[
+        gr.Text(value="2023-01-01", label="Inicio"),
+        gr.Text(value="2023-12-31", label="Fin"),
+        gr.CheckboxGroup(choices=["NDVI", "LST"], value=["NDVI","LST"],
+                         label="Capas a procesar")  # ✔ selección múltiple :contentReference[oaicite:1]{index=1}
+    ],
+    outputs=[gr.Textbox(), gr.Plot()],
+    title="NDVI‑LST Boyacá / Cundinamarca",
+    allow_flagging="never"
+)
 
 if __name__ == '__main__':
-    demo.launch(share=True)   # genera URL pública en Colab :contentReference[oaicite:0]{index=0}
-
+    demo.launch(share=True)
