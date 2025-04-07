@@ -1,7 +1,7 @@
 # gee_utils.py
 # ------------------------------------------------------------
 # Utilidades para Google Earth Engine + exportación con caché
-# Juan David Amaris · 2025
+# Juan David Amaris · 2025
 # ------------------------------------------------------------
 import os, time, ee, shutil, sys
 from importlib import util as _iu
@@ -27,41 +27,43 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 # ============================================================
 # 1.  Inicializar Earth Engine
 # ============================================================
+EE_PROJECT = "ee-jamarism"   # ← tu Cloud Project ID habilitado para EE
+
 def _in_notebook() -> bool:
     """True si estamos dentro de un notebook (hay kernel IPython)."""
     return _iu.find_spec("IPython") and hasattr(sys, "ps1")
 
 def init_gee(service_acct_json: dict | None = None):
     """
-    Inicializa Earth Engine.
-    - Si se pasa un dict (clave de Service Account) → se usa esa cuenta.
-    - Si no, intenta EE.Initialize(); si falla:
-        • Dentro de notebook → abre flujo OAuth.
-        • Fuera de notebook → lanza RuntimeError con instrucciones.
+    Inicializa Earth Engine con el proyecto EE_PROJECT.
+      • Si se pasa un JSON de Service Account → lo usa.
+      • Si no, intenta EE.Initialize(); si falla y estamos en notebook
+        abre el flujo OAuth.
     """
     if service_acct_json:
         creds = ee.ServiceAccountCredentials(
             service_account=service_acct_json["client_email"],
             key_data=service_acct_json,
         )
-        ee.Initialize(creds)
-        print("🔑  GEE inicializado con Service Account")
+        ee.Initialize(creds, project=EE_PROJECT)
+        print(f"🔑  GEE inicializado con Service Account en {EE_PROJECT}")
         return
 
     try:
-        ee.Initialize()
-        print("🔑  GEE ya estaba inicializado")
+        ee.Initialize(project=EE_PROJECT)
+        print(f"🔑  GEE ya estaba inicializado en {EE_PROJECT}")
     except Exception:
         if _in_notebook():
             print("🔐  Autenticando vía OAuth… sigue el enlace")
             ee.Authenticate()
-            ee.Initialize()
+            ee.Initialize(project=EE_PROJECT)
+            print(f"🔑  GEE inicializado en {EE_PROJECT}")
         else:
             raise RuntimeError(
                 "Earth Engine no está autenticado.\n"
-                "👉  Ejecuta primero en una celda de Colab:\n"
-                "      import ee; ee.Authenticate(); ee.Initialize()\n"
-                "    o bien pasa un JSON de Service Account a init_gee()."
+                f"👉  Ejecuta en Colab:\n"
+                f"      import ee; ee.Authenticate(); ee.Initialize(project='{EE_PROJECT}')\n"
+                "    o usa una Service Account."
             )
 
 # ============================================================
@@ -129,7 +131,8 @@ def get_regions():
         )
     )
 
-def ndvi_lst_median(start_date: str, end_date: str, buffer_km: int = 10, scale: int = 250):
+def ndvi_lst_median(start_date: str, end_date: str,
+                    buffer_km: int = 10, scale: int = 250):
     """
     Devuelve (ndvi_img, lst_img, regiones).
     NDVI: MODIS/061/MOD13Q1   LST: MODIS/061/MOD11A1
