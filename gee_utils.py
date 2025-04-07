@@ -1,50 +1,90 @@
 # gee_utils.py
 # ------------------------------------------------------------
-import os, time, ee, shutil
+# Utilidades para Google Earth Engine + exportación con caché
+# Juan David Amaris · 2025
+# ------------------------------------------------------------
+import os, time, ee, shutil, sys
+from importlib import util as _iu
 
-# ---------- 0. Caché en Drive o local ----------
-CACHE_DIR = "/content/gee_cache"
+# ============================================================
+# 0.  Carpeta de caché  (Drive si existe, local en otro caso)
+# ============================================================
+CACHE_DIR   = "/content/gee_cache"          # fallback local
 USING_DRIVE = False
+
 try:
     from google.colab import drive, _ipython
-    if _ipython.get_ipython() is not None:
+    if _ipython.get_ipython() is not None:  # estamos dentro de un notebook
         drive.mount("/content/drive", force_remount=False)
-        CACHE_DIR = "/content/drive/My Drive/gee_cache"
+        CACHE_DIR   = "/content/drive/My Drive/gee_cache"
         USING_DRIVE = True
-        print("✅  Drive montado, usando caché en Drive:", CACHE_DIR)
-except Exception:
-    print("⚠️  No se montó Drive; usaré caché local:", CACHE_DIR)
+        print("✅  Drive montado → caché:", CACHE_DIR)
+except Exception as e:
+    print("⚠️  No se montó Drive, usaré caché local:", CACHE_DIR)
+
 os.makedirs(CACHE_DIR, exist_ok=True)
 
-# ---------- 1. Inicializar Earth Engine ----------
-def init_gee(service_acct_json=None):
+# ============================================================
+# 1.  Inicializar Earth Engine
+# ============================================================
+def _in_notebook() -> bool:
+    """True si estamos dentro de un notebook (hay kernel IPython)."""
+    return _iu.find_spec("IPython") and hasattr(sys, "ps1")
+
+def init_gee(service_acct_json: dict | None = None):
+    """
+    Inicializa Earth Engine.
+    - Si se pasa un dict (clave de Service Account) → se usa esa cuenta.
+    - Si no, intenta EE.Initialize(); si falla:
+        • Dentro de notebook → abre flujo OAuth.
+        • Fuera de notebook → lanza RuntimeError con instrucciones.
+    """
     if service_acct_json:
         creds = ee.ServiceAccountCredentials(
             service_account=service_acct_json["client_email"],
-            key_data=service_acct_json
+            key_data=service_acct_json,
         )
         ee.Initialize(creds)
-        print("🔑  GEE inicializado con cuenta de servicio")
-    else:
-        try:
-            ee.Initialize()
-            print("🔑  GEE ya estaba inicializado")
-        except Exception:
-            print("🔐  Autenticando con OAuth…")
+        print("🔑  GEE inicializado con Service Account")
+        return
+
+    try:
+        ee.Initialize()
+        print("🔑  GEE ya estaba inicializado")
+    except Exception:
+        if _in_notebook():
+            print("🔐  Autenticando vía OAuth… sigue el enlace")
             ee.Authenticate()
             ee.Initialize()
+        else:
+            raise RuntimeError(
+                "Earth Engine no está autenticado.\n"
+                "👉  Ejecuta primero en una celda de Colab:\n"
+                "      import ee; ee.Authenticate(); ee.Initialize()\n"
+                "    o bien pasa un JSON de Service Account a init_gee()."
+            )
 
-# ---------- 2. Polling ----------
-def wait_for_task(task, poll_interval=30):
+# ============================================================
+# 2.  Polling de tareas
+# ============================================================
+def wait_for_task(task, poll_interval: int = 30):
+    """Bloquea hasta que la tarea termine (o falle)."""
     while task.active():
         print(f"⏳  Esperando… estado: {task.status()['state']}")
         time.sleep(poll_interval)
-    if task.status()["state"] != "COMPLETED":
-        raise RuntimeError(f"Tarea falló: {task.status()}")
+    status = task.status()
+    if status["state"] != "COMPLETED":
+        raise RuntimeError(f"Tarea falló: {status}")
     print("✅  Tarea completada")
 
-# ---------- 3. Exportar con caché ----------
-def export_if_needed(img, desc, region, scale, crs="EPSG:4326"):
+# ============================================================
+# 3.  Exportar imagen con caché
+# ============================================================
+def export_if_needed(img, desc: str, region, scale: int, crs: str = "EPSG:4326"):
+    """
+    Exporta a GeoTIFF solo si no existe en la caché.
+    Devuelve la ruta local al .tif.
+    """
     tif_path = os.path.join(CACHE_DIR, f"{desc}.tif")
     if os.path.exists(tif_path):
         print(f"🔁  Usando caché: {tif_path}")
@@ -70,12 +110,17 @@ def export_if_needed(img, desc, region, scale, crs="EPSG:4326"):
         shutil.move(drive_path, tif_path)
         print(f"📥  Copiado a caché: {tif_path}")
     else:
-        raise RuntimeError("Exportado, pero sin Drive montado para copiar el archivo.")
+        raise RuntimeError(
+            "Exportación completada, pero sin Drive montado para copiar el archivo."
+        )
+
     return tif_path
 
-# ---------- 4. Funciones de dominio (faltaban) ----------
+# ============================================================
+# 4.  Funciones de dominio (regiones + medianas)
+# ============================================================
 def get_regions():
-    """Devuelve FeatureCollection con Cundinamarca y Boyacá."""
+    """FeatureCollection con Cundinamarca y Boyacá."""
     gaul = ee.FeatureCollection("FAO/GAUL/2015/level1")
     return gaul.filter(
         ee.Filter.Or(
@@ -84,10 +129,10 @@ def get_regions():
         )
     )
 
-def ndvi_lst_median(start_date, end_date, buffer_km=10, scale=250):
+def ndvi_lst_median(start_date: str, end_date: str, buffer_km: int = 10, scale: int = 250):
     """
-    Calcula las medianas de NDVI y LST MODIS para las fechas indicadas
-    y devuelve (ndvi_img, lst_img, regiones_featureCollection).
+    Devuelve (ndvi_img, lst_img, regiones).
+    NDVI: MODIS/061/MOD13Q1   LST: MODIS/061/MOD11A1
     """
     regions = get_regions()
     roi = regions.geometry().buffer(buffer_km * 1000)
