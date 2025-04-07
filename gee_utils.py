@@ -5,6 +5,7 @@
 # ------------------------------------------------------------
 import os, time, ee, shutil, sys
 from importlib import util as _iu
+import google.auth  # Import for credentials
 
 # ============================================================
 # 0.  Carpeta de caché  (Drive si existe, local en otro caso)
@@ -27,12 +28,6 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 # ============================================================
 # 1.  Inicializar Earth Engine
 # ============================================================
-EE_PROJECT = "ee-jamarism"   # ← tu Cloud Project ID habilitado para EE
-
-def _in_notebook() -> bool:
-    """True si estamos dentro de un notebook (hay kernel IPython)."""
-    return _iu.find_spec("IPython") and hasattr(sys, "ps1")
-
 def init_gee(service_acct_json: dict | None = None):
     """
     Inicializa Earth Engine con el proyecto EE_PROJECT.
@@ -46,25 +41,20 @@ def init_gee(service_acct_json: dict | None = None):
             key_data=service_acct_json,
         )
         ee.Initialize(creds, project=EE_PROJECT)
-        print(f"🔑  GEE inicializado con Service Account en {EE_PROJECT}")
-        return
-
-    try:
-        ee.Initialize(project=EE_PROJECT)
-        print(f"🔑  GEE ya estaba inicializado en {EE_PROJECT}")
-    except Exception:
-        if _in_notebook():
-            print("🔐  Autenticando vía OAuth… sigue el enlace")
-            ee.Authenticate()
-            ee.Initialize(project=EE_PROJECT)
-            print(f"🔑  GEE inicializado en {EE_PROJECT}")
-        else:
-            raise RuntimeError(
-                "Earth Engine no está autenticado.\n"
-                f"👉  Ejecuta en Colab:\n"
-                f"      import ee; ee.Authenticate(); ee.Initialize(project='{EE_PROJECT}')\n"
-                "    o usa una Service Account."
-            )
+        print("✅ Earth Engine initialized with service account.")
+    else:
+        try:
+            ee.Initialize()
+            print("✅ Earth Engine initialized with default credentials.")
+        except ee.EEException as e:
+            if _in_notebook():
+                print("⚠️ Default initialization failed. Trying OAuth...")
+                # Get application default credentials
+                credentials, project = google.auth.default() 
+                ee.Initialize(credentials, project=EE_PROJECT)
+                print("✅ Earth Engine initialized with OAuth.")
+            else:
+                raise e 
 
 # ============================================================
 # 2.  Polling de tareas
