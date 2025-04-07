@@ -1,0 +1,8 @@
+# Colab / Python
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# Auth tokens
+token.txt
+.env
