@@ -122,7 +122,7 @@ b) gw_correlation_yearly_panels(k=3, lag=0, firms_csv_path=".../FIRMS_MONTH_*.cs
 Trabajo final de maestría en curso:
 
 ```
-@thesis{Amaris2025,
+@thesis{Amaris2026,
   author  = {Juan David Amaris Martínez},
   title   = {Modelado Predictivo de Incendios Forestales Relacionados con Sequías en Boyacá y Cundinamarca usando Análisis de Sensoramiento Remoto y Datos Climáticos},
   school  = {Universidad Nacional de Colombia},
