@@ -19,17 +19,15 @@ Código y recursos de la tesis **“Modelado Predictivo de Incendios Forestales 
 ## 📁 Estructura del repositorio
 
 ```
-.
 ├─ gee/
-│  └─ daily_spei3_fdci.js        # Script GEE
+│  └─ daily_spei3_fdci.js        # Script GEE (SPEI-3 + FDCI diario, visualización)
 ├─ python/
-│  ├─ SPI_SPEI_NIFT.py           # Suite unificada (SPI, SPEI, NIFT, exportes, GWSS)
-│  ├─ FDCI.py                    # Dependencias Python
-│  └─ README_python.md           # Guía de ejecución y ejemplos
+│  ├─ SPI_SPEI_NIFT.ipynb        # Suite unificada (SPI, SPEI, NIFT, exportes, GWSS)
+│  └─ FDCI.ipynb                 # Cálculo de TVDI, límites húmedo–seco y calibración del FDCI
 ├─ data/
 │  └─ SPEI_Params_TS3            # Asset para ejecución de SPEI3 sin recalculo en GEE
 ├─ LICENSE
-└─ README.md                     # Este archivo
+└─ README.md                     
 ```
 
 ---
