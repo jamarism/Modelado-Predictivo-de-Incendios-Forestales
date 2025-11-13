@@ -153,8 +153,8 @@ furnished to do so, subject to the following conditions:
 ## 📝 Notas de reproducción
 
 * Modificar rutas y renombrar Cloud Project
-* Verifica que el Asset `SPEI_Params_TS3` exista.
-* Ajustar percentiles **LST_P02/LST_P98** y pesos `w_*` si cambias la región.
+* Verificar que el Asset `SPEI_Params_TS3` exista.
+* Ajustar percentiles **LST_P02/LST_P98** y pesos `w_*` si cambia la región.
 * **FIRMS**: usa confianza ≥80 (editable). Las exportaciones mensuales se alinean a la **grilla CHIRPS**.
 * **GWSS**: se usa `GWmodel::gwss` con **kernel bi-square** y **vecindario adaptativo** por defecto; el código calcula FDR con Benjamini–Hochberg.
 
