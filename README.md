@@ -11,7 +11,7 @@ Código y recursos de la tesis **“Modelado Predictivo de Incendios Forestales 
 
 ## 🔗 Enlaces
 
-- **Repositorio (GEE):** https://earthengine.googlesource.com/users/jamarism/Remote_Sensing_Fire  
+- **Repositorio (GEE):** git clone https://earthengine.googlesource.com/users/jamarism/Remote_Sensing_Fire  
 - **Asset SPEI-3 (parámetros):** https://code.earthengine.google.com/?asset=projects/ee-jamarism/assets/SPEI_Params_TS3
 
 ---
@@ -41,11 +41,13 @@ Código y recursos de la tesis **“Modelado Predictivo de Incendios Forestales 
 * Construye mosaicos con *gap‑fill* (ventanas **30/45/730 d** según variable) y deriva **TVDI** por líneas seca/húmeda parametrizadas por NDVI.
 * **FDCI** (calibrado) = combinación ponderada:
 
-  [\mathrm{FDCI} = \frac{w_{LST},LST_{SER}+ w_{NDVI},NDVI + w_{TVDI},TVDI + w_{HAZ},HAZ + 1}{4}]
+  $$\mathrm{FDCI} = \frac{w_{LST},LST_{SER}+ w_{NDVI},NDVI + w_{TVDI},TVDI + w_{HAZ},HAZ + 1}{4}$$
 
   con pesos calibrados: `w_lst=0.918, w_ndvi=0.017, w_tvdi=0.465, w_haz=0.411`. **LST_SER** se normaliza con percentiles fijos (P02, P98) definidos regionalmente.
 * Detección **Hot Spots** por umbrales: **FDCI ≥ 0.62** ∧ **SPEI‑3 ≤ 0.1** el mismo día. FIRMS (VIIRS 375 m) se usa como capa de referencia (confianza 0–100).
 * UI en GEE con **textbox de fecha**, botón “Actualizar” y **leyendas**.
+
+<img width="2547" height="1072" alt="image" src="https://github.com/user-attachments/assets/fd54eeca-ad92-417c-a69a-02a6d7d4518b" />
 
 **Visualización propuesta:**
 
@@ -168,3 +170,29 @@ furnished to do so, subject to the following conditions:
 
 ---
 
+## Referencias
+
+### SPEI (índice de sequía multiescala):
+
+Vicente-Serrano, S. M., Beguería, S., & López-Moreno, J. I. (2010). A Multiscalar Drought Index Sensitive to Global Warming: The Standardized Precipitation Evapotranspiration Index (SPEI). Journal of Climate, 23(7), 1696–1718.
+
+DOI: 10.1175/2009JCLI2909.1 — https://journals.ametsoc.org/view/journals/clim/23/7/2009jcli2909.1.xml
+
+### Paquete oficial SPEI (software):
+
+Beguería, S., & Vicente-Serrano, S. M. (2023). SPEI: Calculation of the Standardized Precipitation-Evapotranspiration Index.
+
+Sitio: https://spei.csic.es — Código: https://github.com/sbegueria/SPEI
+
+### NIFT (exposición a sequías, soporte conceptual para ventanas/ponderaciones):
+
+Brasil Neto, R. M., & Santos, C. A. G. (2024). The NIFT index: A new approach to assessing meteorological drought exposure. Journal of Hydrology, 632, 130857.
+
+DOI: https://doi.org/10.1016/j.jhydrol.2024.130857
+Brasil Neto and Santos - 2024 -…
+
+### FDCI (peligro de incendios a corto plazo con NDVI, LST, TVDI, VT):
+
+Chen, C., Xu, T., Sun, F., & Zhao, D. (2023). A fire danger index assessment method for short-term pre-warning of wildfires: A case study of Xiangxi, China. Safety Science, 167, 106287.
+
+DOI: https://doi.org/10.1016/j.ssci.2023.106287
